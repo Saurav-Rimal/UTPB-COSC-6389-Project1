@@ -1,336 +1,229 @@
 import math
 import random
 import tkinter as tk
-from tkinter import *
+from tkinter import Canvas, Label, Button, Entry
 import threading
 
-num_items = 100
-frac_target = 0.7
-min_value = 128
-max_value = 2048
-
-screen_padding = 25
-item_padding = 5
-stroke_width = 5
-
+# Configuration constants
+edge_probability = 0.2
+node_radius = 10  # Smaller vertices
+edge_width = 2
+num_colors = 4
 num_generations = 1000
 pop_size = 50
 elitism_count = 2
 mutation_rate = 0.1
-
 sleep_time = 0.1
+COLOR_PALETTE = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00']
 
+class Graph:
+    def __init__(self, num_vertices, edge_probability):
+        self.num_vertices = num_vertices
+        self.edges = []
+        self.vertex_positions = {}
 
-def random_rgb_color():
-    red = random.randint(0x10, 0xff)
-    green = random.randint(0x10, 0xff)
-    blue = random.randint(0x10, 0xff)
-    hex_color = '#{:02x}{:02x}{:02x}'.format(red, green, blue)
-    return hex_color
+        for i in range(num_vertices):
+            for j in range(i + 1, num_vertices):
+                if random.random() < edge_probability:
+                    self.edges.append((i, j))
 
+        for i in range(num_vertices):
+            angle = 2 * math.pi * i / num_vertices
+            radius = 0.8
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            self.vertex_positions[i] = (x, y)
 
-class Item:
-    def __init__(self):
-        self.value = random.randint(min_value, max_value)
-        self.color = random_rgb_color()
-        self.x = 0
-        self.y = 0
-        self.w = 0
-        self.h = 0
+    def get_edges(self):
+        return self.edges
 
-    def place(self, x, y, w, h):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
+    def get_neighbors(self, vertex):
+        neighbors = []
+        for edge in self.edges:
+            if edge[0] == vertex:
+                neighbors.append(edge[1])
+            elif edge[1] == vertex:
+                neighbors.append(edge[0])
+        return neighbors
 
-    def draw(self, canvas, active=False):
-        canvas.create_text(self.x+self.w+item_padding+stroke_width*2, self.y+self.h/2, text=f'{self.value}')
-        if active:
-            canvas.create_rectangle(self.x,
-                                    self.y,
-                                    self.x+self.w,
-                                    self.y+self.h,
-                                    fill=self.color,
-                                    outline=self.color,
-                                    width=stroke_width)
-        else:
-            canvas.create_rectangle(self.x,
-                                    self.y,
-                                    self.x+self.w,
-                                    self.y+self.h,
-                                    fill='',
-                                    outline=self.color,
-                                    width=stroke_width)
-
+    def get_vertex_position(self, vertex):
+        return self.vertex_positions[vertex]
 
 class UI(tk.Tk):
     def __init__(self):
         tk.Tk.__init__(self)
-        # Set the title of the window
-        self.title("Knapsack")
-        # Hide the minimize/maximize/close decorations at the top of the window frame
-        #   (effectively making it act like a full-screen application)
-        self.option_add("*tearOff", FALSE)
-        # Get the screen width and height
-        self.width, self.height = self.winfo_screenwidth(), self.winfo_screenheight()
-        # Set the window width and height to fill the screen
+        self.title("Graph Coloring Solver")
+        self.configure(bg="#1A1A1D")
+
+        self.width = self.winfo_screenwidth()
+        self.height = self.winfo_screenheight()
         self.geometry("%dx%d+0+0" % (self.width, self.height))
-        # Set the window content to fill the width * height area
         self.state("zoomed")
 
-        self.canvas = Canvas(self)
-        self.canvas.place(x=0, y=0, width=self.width, height=self.height)
+        self.canvas = Canvas(self, bg="#1A1A1D", highlightthickness=0)
+        self.canvas.place(x=0, y=50, width=self.width, height=self.height - 50)
 
-        self.items_list = []
+        self.graph = None
+        self.best_fitness = float('inf')
+        self.current_conflicts = 0
 
-        # We create a standard banner menu bar and attach it to the window
-        menu_bar = Menu(self)
-        self['menu'] = menu_bar
+        # Top bar for controls
+        self.top_bar = Canvas(self, bg="#333333", height=50, highlightthickness=0)
+        self.top_bar.place(x=0, y=0, width=self.width, height=50)
 
-        # We have to individually create the "File", "Edit", etc. cascade menus, and this is the first
-        menu_K = Menu(menu_bar)
-        # The underline=0 parameter doesn't actually do anything by itself,
-        #   but if you also create an "accelerator" so that users can use the standard alt+key shortcuts
-        #   for the menu, it will underline the appropriate key to indicate the shortcut
-        menu_bar.add_cascade(menu=menu_K, label='Knapsack', underline=0)
+        Label(self.top_bar, text="Number of Vertices:", fg="white", bg="#333333", font=("Arial", 12)).place(x=20, y=15)
+        self.vertices_input = Entry(self.top_bar, bg="#555555", fg="white", width=5, font=("Arial", 12))
+        self.vertices_input.place(x=150, y=15)
+        self.vertices_input.insert(0, "20")
 
-        def generate():
-            self.generate_knapsack()
-            self.draw_items()
-        # The add_command function adds an item to a menu, as opposed to add_cascade which adds a sub-menu
-        # Note that we use command=generate without the () - we're telling it which function to call,
-        #   not actually calling the function as part of the add_command
-        menu_K.add_command(label="Generate", command=generate, underline=0)
+        Button(self.top_bar, text="Generate Graph", command=self.generate_graph, bg="#555555", fg="white", font=("Arial", 12)).place(x=220, y=10)
+        Button(self.top_bar, text="Run Algorithm", command=self.start_thread, bg="#555555", fg="white", font=("Arial", 12)).place(x=350, y=10)
 
-        self.target = 0
+        self.stats_label = Label(self.top_bar, text="", fg="white", bg="#333333", font=("Arial", 12), anchor="e")
+        self.stats_label.place(x=self.width - 300, y=10, width=280)
 
-        def set_target():
-            target_set = []
-            for x in range(int(num_items * frac_target)):
-                item = self.items_list[random.randint(0, len(self.items_list)-1)]
-                while item in target_set:
-                    item = self.items_list[random.randint(0, len(self.items_list) - 1)]
-                target_set.append(item)
-            total = 0
-            for item in target_set:
-                total += item.value
-            self.target = total
-            self.draw_target()
-        menu_K.add_command(label="Get Target", command=set_target, underline=0)
-
-        def start_thread():
-            thread = threading.Thread(target=self.run, args=())
-            thread.start()
-        menu_K.add_command(label="Run", command=start_thread, underline=0)
-
-        # We have to call self.mainloop() in our constructor (__init__) to start the UI loop and display the window
         self.mainloop()
 
-    def get_rand_item(self):
-        i1 = Item()
-        for i2 in self.items_list:
-            if i1.value == i2.value:
-                return None
-        return i1
+    def generate_graph(self):
+        try:
+            num_vertices = int(self.vertices_input.get())
+        except ValueError:
+            print("Invalid number of vertices")
+            return
 
-    def add_item(self):
-        item = self.get_rand_item()
-        while item is None:
-            item = self.get_rand_item()
-        self.items_list.append(item)
-
-    def generate_knapsack(self):
-        for i in range(num_items):
-            self.add_item()
-
-        item_max = 0
-        item_min = 9999
-        for item in self.items_list:
-            item_min = min(item_min, item.value)
-            item_max = max(item_max, item.value)
-
-        w = self.width - screen_padding
-        h = self.height - screen_padding
-        num_rows = math.ceil(num_items / 6)
-        row_w = w / 8 - item_padding
-        row_h = (h - 200) / num_rows
-        # print(f'{w}, {h}, {num_rows}, {row_w}, {row_h}')
-        for x in range(0, 6):
-            for y in range(0, num_rows):
-                if x * num_rows + y >= num_items:
-                    break
-                item = self.items_list[x * num_rows + y]
-                item_w = row_w / 2
-                item_h = max(item.value / item_max * row_h, 1)
-                # print(f'{screen_padding+x*row_w+x*item_padding},'
-                #      f'{screen_padding+y*row_h+y*item_padding},'
-                #      f'{item_w},'
-                #      f'{item_h}')
-                item.place(screen_padding + x * row_w + x * item_padding,
-                           screen_padding + y * row_h + y * item_padding,
-                           item_w,
-                           item_h)
+        self.graph = Graph(num_vertices, edge_probability)
+        self.clear_canvas()
+        self.draw_graph()
 
     def clear_canvas(self):
         self.canvas.delete("all")
 
-    def draw_items(self):
-        for item in self.items_list:
-            item.draw(self.canvas)
+    def transform_coordinates(self, x, y):
+        padding = 100
+        screen_x = (x + 1) * (self.width - 2 * padding) / 2 + padding
+        screen_y = (y + 1) * (self.height - 2 * padding) / 2 + padding
+        return screen_x, screen_y
 
-    def draw_target(self):
-        x = (self.width - screen_padding) / 8 * 7
-        y = screen_padding
-        w = (self.width - screen_padding) / 8 - screen_padding
-        h = self.height / 2 - screen_padding
-        self.canvas.create_rectangle(x, y, x + w, y + h, fill='black')
-        self.canvas.create_text(x+w//2, y+h+screen_padding, text=f'{self.target}', font=('Arial', 18))
+    def draw_graph(self, coloring=None):
+        if not self.graph:
+            return
 
-    def draw_sum(self, item_sum, target):
-        x = (self.width - screen_padding) / 8 * 6
-        y = screen_padding
-        w = (self.width - screen_padding) / 8 - screen_padding
-        h = self.height / 2 - screen_padding
-        # print(f'{item_sum} / {target} * {h} = {item_sum/target} * {h} = {item_sum/target*h}')
-        h *= (item_sum / target)
-        self.canvas.create_rectangle(x, y, x + w, y + h, fill='black')
-        self.canvas.create_text(x+w//2, y+h+screen_padding, text=f'{item_sum} ({"+" if item_sum>target else "-"}{abs(item_sum-target)})', font=('Arial', 18))
+        for edge in self.graph.get_edges():
+            v1, v2 = edge
+            x1, y1 = self.graph.get_vertex_position(v1)
+            x2, y2 = self.graph.get_vertex_position(v2)
 
-    def draw_genome(self, genome, gen_num):
-        for i in range(num_items):
-            item = self.items_list[i]
-            active = genome[i]
-            item.draw(self.canvas, active)
-        x = (self.width - screen_padding) / 8 * 6
-        y = screen_padding
-        w = (self.width - screen_padding) / 8 - screen_padding
-        h = self.height / 4 * 3
-        self.canvas.create_text(x + w, y + h + screen_padding*2, text=f'Generation {gen_num}', font=('Arial', 18))
+            x1, y1 = self.transform_coordinates(x1, y1)
+            x2, y2 = self.transform_coordinates(x2, y2)
+
+            self.canvas.create_line(x1, y1, x2, y2, width=edge_width, fill='gray')
+
+        for vertex in range(self.graph.num_vertices):
+            x, y = self.graph.get_vertex_position(vertex)
+            x, y = self.transform_coordinates(x, y)
+
+            color = COLOR_PALETTE[coloring[vertex] if coloring else 0]
+
+            self.canvas.create_oval(
+                x - node_radius, y - node_radius,
+                x + node_radius, y + node_radius,
+                fill='white' if not coloring else color, outline='black', width=2
+            )
+
+    def update_stats(self, generation):
+        stats_text = f"Colors used: {num_colors}  |  Current conflicts: {self.current_conflicts}  |  Best fitness: {self.best_fitness}  |  Generation: {generation}"
+        self.stats_label.config(text=stats_text)
+
+    def start_thread(self):
+        if not self.graph:
+            print("Generate a graph first!")
+            return
+        thread = threading.Thread(target=self.run)
+        thread.start()
 
     def run(self):
-        global pop_size
-        global num_generations
-
-        def gene_sum(genome):
-            total = 0
-            for i in range(len(genome) - 1):
-                if genome[i]:
-                    total += self.items_list[i].value
-            return total
+        def count_conflicts(coloring):
+            conflicts = 0
+            for edge in self.graph.get_edges():
+                v1, v2 = edge
+                if coloring[v1] == coloring[v2]:
+                    conflicts += 1
+            return conflicts
 
         def fitness(genome):
-            return abs(gene_sum(genome) - self.target)
+            return count_conflicts(genome)
 
-        def get_population(last_pop=None, fitnesses=None):
+        def create_initial_population():
             population = []
-            if last_pop is None:
-                for g in range(pop_size):
-                    genome = []
-                    for bit in range(num_items):
-                        genome.append(random.random() < frac_target)
-                    population.append(genome)
-                return population
-            else:
-                # elitism
-                elites = []
-                for e in range(elitism_count):
-                    elites.append(fitnesses[e])
-                for e in last_pop:
-                    if fitness(e) in elites:
-                        population.append(e)
+            for _ in range(pop_size):
+                genome = [random.randint(0, num_colors - 1) for _ in range(self.graph.num_vertices)]
+                population.append(genome)
+            return population
 
-                def select_parents(min_fitness):
-                    weights = []
-                    for parent in last_pop:
-                        if fitness(parent) == 0.0:
-                            weights.append(1.0)
-                        else:
-                            weights.append(min_fitness / fitness(parent))
+        def select_parents(population, fitnesses):
+            def tournament_select():
+                tournament_size = 3
+                tournament = random.sample(list(enumerate(fitnesses)), tournament_size)
+                winner_idx = min(tournament, key=lambda x: x[1])[0]
+                return population[winner_idx]
 
-                    def get_by_weight():
-                        idx = random.randint(0, pop_size - 1)
-                        while random.random() < weights[idx]:
-                            idx = random.randint(0, pop_size - 1)
-                        return last_pop[idx]
+            return tournament_select(), tournament_select()
 
-                    return get_by_weight(), get_by_weight()
+        def crossover(parent1, parent2):
+            crossover_points = sorted(random.sample(range(len(parent1)), 2))
+            child = parent1[:crossover_points[0]] + \
+                    parent2[crossover_points[0]:crossover_points[1]] + \
+                    parent1[crossover_points[1]:]
+            return child
 
-                def crossover(parent1, parent2):
-                    length = len(parent1)
-                    x = random.randint(0, length // 2)
-                    y = x + length // 2
-                    g_out = []
-                    for i in range(length):
-                        if x < i <= y:
-                            g_out.append(parent2[i])
-                        else:
-                            g_out.append(parent1[i])
-                    if len(g_out) < num_items:
-                        print('Error!')
-                    return g_out
+        def mutate(genome):
+            if random.random() < mutation_rate:
+                point = random.randint(0, len(genome) - 1)
+                new_color = random.randint(0, num_colors - 1)
+                while new_color == genome[point]:
+                    new_color = random.randint(0, num_colors - 1)
+                genome[point] = new_color
+            return genome
 
-                def mutate(g_in):
-                    x = random.randint(0, len(g_in) - 1)
-                    g_out = []
-                    for i in range(len(g_in)):
-                        if i == x:
-                            g_out.append(not g_in[i])
-                        else:
-                            g_out.append(g_in[i])
-                    return g_out
-
-                # fill generation with new individuals
-                while len(population) < pop_size:
-                    # select two random parents by weighted selection
-                    # note no guarantee of uniqueness - could get the same parent twice
-                    parents = select_parents(fitnesses[0])
-                    # perform crossover to generate new individual
-                    baby = crossover(parents[0], parents[1])
-                    # potentially perform mutation
-                    if random.random() < mutation_rate:
-                        baby = mutate(baby)
-                    # add to next generation
-                    population.append(baby)
-
-                return population
-
-        def generation_step(generation=0, pop=None):
+        def evolution_step(generation=0, population=None):
             if generation >= num_generations:
-                return  # Stop the process after the set number of generations
+                return
 
-            if pop is None:
-                pop = get_population()
+            if population is None:
+                population = create_initial_population()
 
-            fitnesses = []
-            best_of_gen = None
-            min_fitness = 9999
-            for genome in pop:
-                fit = fitness(genome)
-                if fit < min_fitness:
-                    best_of_gen = genome
-                    min_fitness = fit
-                fitnesses.append(fit)
-            fitnesses.sort()
+            population_fitness = [(genome, fitness(genome)) for genome in population]
+            population_fitness.sort(key=lambda x: x[1])
 
-            print(f'Best fitness of generation {generation}: {min_fitness}')
-            print(best_of_gen)
-            print()
+            best_genome = population_fitness[0][0]
+            self.best_fitness = population_fitness[0][1]
+            self.current_conflicts = self.best_fitness
 
-            # Schedule the UI updates in the main thread
+            print(f'Generation {generation}, Conflicts: {self.best_fitness}')
+
             self.after(0, self.clear_canvas)
-            self.after(0, self.draw_target)
-            self.after(0, self.draw_sum, gene_sum(best_of_gen), self.target)
-            self.after(0, self.draw_genome, best_of_gen, generation)
+            self.after(0, self.draw_graph, best_genome)
+            self.after(0, self.update_stats, generation)
 
-            # Schedule the next generation step after a delay, unless we're at the global optimum (fitness == 0)
-            if fitnesses[0] != 0:
-                self.after(int(sleep_time * 1000), generation_step, generation + 1, get_population(pop, fitnesses))
+            if self.best_fitness == 0:
+                return
 
-        # Start the evolutionary process
-        generation_step()
+            new_population = []
 
+            new_population.extend([genome for genome, _ in population_fitness[:elitism_count]])
 
-# In python, we have this odd construct to catch the main thread and instantiate our Window class
-if __name__ == '__main__':
+            while len(new_population) < pop_size:
+                parent1, parent2 = select_parents(
+                    [genome for genome, _ in population_fitness],
+                    [fitness for _, fitness in population_fitness]
+                )
+                child = crossover(parent1, parent2)
+                child = mutate(child)
+                new_population.append(child)
+
+            self.after(int(sleep_time * 1000), evolution_step, generation + 1, new_population)
+
+        evolution_step()
+
+if __name__ == "__main__":
     UI()

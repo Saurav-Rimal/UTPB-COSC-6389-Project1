@@ -1,134 +1,198 @@
 import math
 import random
 import tkinter as tk
-from tkinter import *
+from tkinter import messagebox
+import os
 
-num_cities = 25
-num_roads = 100
-city_scale = 5
-road_width = 4
-padding = 100
+os.environ['PYTHONWARNINGS'] = 'ignore'
 
+city_count = 25
+node_size = 7  # Slightly larger node size
+connection_thickness = 1
+margin = 50
 
 class Node:
-    def __init__(self, x, y):
+    def __init__(self, x, y, identifier):
         self.x = x
         self.y = y
+        self.identifier = identifier
 
-    def draw(self, canvas, color='black'):
-        canvas.create_oval(self.x-city_scale, self.y-city_scale, self.x+city_scale, self.y+city_scale, fill=color)
-
+    def render(self, canvas, hue='white'):
+        canvas.create_oval(
+            self.x - node_size, self.y - node_size,
+            self.x + node_size, self.y + node_size,
+            fill=hue, outline=hue
+        )
 
 class Edge:
-    def __init__(self, a, b):
-        self.city_a = a
-        self.city_b = b
-        self.length = math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+    def __init__(self, origin, destination):
+        self.origin = origin
+        self.destination = destination
+        self.length = math.hypot(origin.x - destination.x, origin.y - destination.y)
 
-    def draw(self, canvas, color='grey', style=(2, 4)):
-        canvas.create_line(self.city_a.x,
-                           self.city_a.y,
-                           self.city_b.x,
-                           self.city_b.y,
-                           fill=color,
-                           width=road_width,
-                           dash=style)
+    def render(self, canvas, hue='red', dotted=False):
+        options = {'fill': hue, 'width': connection_thickness}
+        if dotted:
+            options['dash'] = (4, 2)
+        canvas.create_line(
+            self.origin.x, self.origin.y,
+            self.destination.x, self.destination.y,
+            **options
+        )
 
+class RouteOptimizer:
+    def __init__(self, nodes):
+        self.nodes = nodes
+        self.node_count = len(nodes)
+        self.distance_grid = self.build_distance_grid()
+        self.current_route = list(range(self.node_count))
+        random.shuffle(self.current_route)
+        self.optimal_route = self.current_route[:]
+        self.shortest_distance = self.compute_route_length(self.optimal_route)
+        self.heat = 10000
+        self.cooling_factor = 0.995
 
-class UI(tk.Tk):
+    def build_distance_grid(self):
+        grid = [[0] * self.node_count for _ in range(self.node_count)]
+        for i in range(self.node_count):
+            for j in range(i + 1, self.node_count):
+                distance = math.hypot(
+                    self.nodes[i].x - self.nodes[j].x,
+                    self.nodes[i].y - self.nodes[j].y
+                )
+                grid[i][j] = distance
+                grid[j][i] = distance
+        return grid
+
+    def compute_route_length(self, route):
+        total = 0
+        for i in range(len(route)):
+            a, b = route[i], route[(i + 1) % len(route)]
+            total += self.distance_grid[a][b]
+        return total
+
+    def swap_nodes(self, route):
+        new_route = route[:]
+        i, j = random.sample(range(self.node_count), 2)
+        new_route[i], new_route[j] = new_route[j], new_route[i]
+        return new_route
+
+    def optimize(self):
+        candidate_route = self.swap_nodes(self.current_route)
+        current_length = self.compute_route_length(self.current_route)
+        candidate_length = self.compute_route_length(candidate_route)
+        if self.should_accept(current_length, candidate_length, self.heat):
+            self.current_route = candidate_route
+            current_length = candidate_length
+            if current_length < self.shortest_distance:
+                self.shortest_distance = current_length
+                self.optimal_route = self.current_route[:]
+        self.heat *= self.cooling_factor
+
+    def should_accept(self, current, candidate, temp):
+        if candidate < current:
+            return True
+        return random.random() < math.exp((current - candidate) / temp)
+
+class TravelingSalesmanGUI(tk.Tk):
     def __init__(self):
-        tk.Tk.__init__(self)
-        # Set the title of the window
-        self.title("Traveling Salesman")
-        # Hide the minimize/maximize/close decorations at the top of the window frame
-        #   (effectively making it act like a full-screen application)
-        self.option_add("*tearOff", FALSE)
-        # Get the screen width and height
-        width, height = self.winfo_screenwidth(), self.winfo_screenheight()
-        # Set the window width and height to fill the screen
-        self.geometry("%dx%d+0+0" % (width, height))
-        # Set the window content to fill the width * height area
-        self.state("zoomed")
+        super().__init__()
+        self.title("Traveling Salesman Problem")
+        self.geometry("1024x700")
+        self.configure(bg="#0F0F0F")
 
-        self.canvas = Canvas(self)
-        self.canvas.place(x=0, y=0, width=width, height=height)
-        w = width-padding
-        h = height-padding*2
-
-        cities_list = []
-        roads_list = []
-        edge_list = []
-
-        def add_city():
-            x = random.randint(padding, w)
-            y = random.randint(padding, h)
-
-            node = Node(x, y)
-            cities_list.append(node)
-
-        def add_road():
-            a = random.randint(0, len(cities_list)-1)
-            b = random.randint(0, len(cities_list)-1)
-
-            road = f'{min(a, b)},{max(a, b)}'
-            while a == b or road in roads_list:
-                a = random.randint(0, len(cities_list)-1)
-                b = random.randint(0, len(cities_list)-1)
-                road = f'{min(a, b)},{max(a, b)}'
-
-            edge = Edge(cities_list[a], cities_list[b])
-            roads_list.append(road)
-            edge_list.append(edge)
-
-        def generate_city():
-            for c in range(num_cities):
-                add_city()
-            for r in range(num_roads):
-                add_road()
-
-        def draw_city():
-            #clear_canvas()
-            for e in edge_list:
-                e.draw(self.canvas)
-            for n in cities_list:
-                n.draw(self.canvas)
-
-        def draw_genome(genome):
-            #clear_canvas()
-            for e in range(num_roads):
-                edge = edge_list[e]
-                color = 'grey'
-                style = (2, 4)
-                if genome[e]:
-                    color = 'red'
-                    style = (1, 0)
-                edge.draw(self.canvas, color, style)
-            for n in cities_list:
-                n.draw(self.canvas, 'red')
-
-        # We create a standard banner menu bar and attach it to the window
-        menu_bar = Menu(self)
-        self['menu'] = menu_bar
-
-        # We have to individually create the "File", "Edit", etc. cascade menus, and this is the first
-        menu_TS = Menu(menu_bar)
-        # The underline=0 parameter doesn't actually do anything by itself,
-        #   but if you also create an "accelerator" so that users can use the standard alt+key shortcuts
-        #   for the menu, it will underline the appropriate key to indicate the shortcut
-        menu_bar.add_cascade(menu=menu_TS, label='Salesman', underline=0)
-
-        def generate():
-            generate_city()
-            draw_city()
-        # The add_command function adds an item to a menu, as opposed to add_cascade which adds a sub-menu
-        # Note that we use command=generate without the () - we're telling it which function to call,
-        #   not actually calling the function as part of the add_command
-        menu_TS.add_command(label="Generate", command=generate, underline=0)
-
-        # We have to call self.mainloop() in our constructor (__init__) to start the UI loop and display the window
-        self.mainloop()
+        self.top_bar = tk.Frame(self, bg="#333333", height=100)
+        self.top_bar.pack(side=tk.TOP, fill=tk.X, pady=0)
 
 
-# In python, we have this odd construct to catch the main thread and instantiate our Window class
+        self.canvas = tk.Canvas(self, bg="#0F0F0F", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        self.node_collection = []
+        self.optimizer = None
+        self.active = False
+
+        self.create_top_buttons()
+
+    def create_top_buttons(self):
+        button_width = 15
+        button_style = {
+            "bg": "#1E1E1E",
+            "fg": "black",
+            "activebackground": "#3E3E3E",
+            "activeforeground": "red",
+            "bd": 2,
+            "font": ("Arial", 12, "bold"),
+            "width": button_width,
+            "height": 1
+        }
+
+        tk.Button(self.top_bar, text="Generate Nodes", command=self.populate, **button_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(self.top_bar, text="Begin Optimization", command=self.initiate_optimizer, **button_style).pack(side=tk.LEFT, padx=5)
+        tk.Button(self.top_bar, text="Clear", command=self.clear, **button_style).pack(side=tk.LEFT, padx=5)
+
+        self.info_bar = tk.Label(self.top_bar, text="Optimal Route Length: ", anchor="e", fg="#FFFFFF", font=("Helvetica", 10, "bold"))
+        self.info_bar.pack(side=tk.RIGHT, padx=10)
+
+    def populate(self):
+        self.reset_canvas()
+        self.node_collection.clear()
+        for i in range(city_count):
+            self.create_node(i)
+        self.display_nodes()
+
+    def create_node(self, id):
+        x = random.randint(margin, self.winfo_width() - margin)
+        y = random.randint(margin, self.winfo_height() - margin)
+        node = Node(x, y, id)
+        self.node_collection.append(node)
+
+    def display_nodes(self):
+        for node in self.node_collection:
+            node.render(self.canvas)
+
+    def reset_canvas(self):
+        self.canvas.delete("all")
+
+    def initiate_optimizer(self):
+        if not self.node_collection:
+            self.populate()
+        self.optimizer = RouteOptimizer(self.node_collection)
+        self.active = True
+        self.run_optimization()
+
+    def run_optimization(self):
+        if self.active and self.optimizer.heat > 1:
+            self.optimizer.optimize()
+            self.reset_canvas()
+            self.visualize_route(self.optimizer.current_route)
+            self.canvas.update()
+            self.after(10, self.run_optimization)
+        else:
+            self.active = False
+            self.show_optimal_length()
+
+    def show_optimal_length(self):
+        self.info_bar.config(text=f"Optimal Route Length: {int(self.optimizer.shortest_distance)}")
+        self.reset_canvas()
+        self.visualize_route(self.optimizer.optimal_route, final=True)
+
+    def clear(self):
+        self.reset_canvas()
+        self.node_collection.clear()
+        self.info_bar.config(text="Optimal Route Length: ")
+        self.active = False
+
+    def visualize_route(self, route, final=False):
+        color = 'green' if final else 'red'
+        for i in range(len(route)):
+            node_a = self.node_collection[route[i]]
+            node_b = self.node_collection[ route[(i + 1) % len(route)]]
+            edge = Edge(node_a, node_b)
+            edge.render(self.canvas, hue=color, dotted=True)
+        for node in self.node_collection:
+            node.render(self.canvas, hue='white')
+
 if __name__ == '__main__':
-    UI()
+    gui = TravelingSalesmanGUI()
+    gui.mainloop()
