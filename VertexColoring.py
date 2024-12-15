@@ -5,231 +5,257 @@ from tkinter import Canvas, Label, Button, Entry
 import threading
 
 # Configuration constants
-EDGE_CHANCE = 0.2
-VERTEX_SIZE = 10
-LINE_THICKNESS = 1
-TOTAL_ITERATIONS = 1000
-POPULATION_COUNT = 50
-ELITE_SURVIVORS = 2
-GENE_ALTERATION_RATE = 0.1
-RENDER_DELAY = 0.1
+EDGE_PROBABILITY = 0.2
+NODE_RADIUS = 10
+EDGE_WIDTH = 1
+MAX_GENERATIONS = 1000
+GENOME_COUNT = 50
+TOP_PERFORMERS = 2
+MUTATION_RATE = 0.1
+VISUALIZATION_INTERVAL = 0.1
 
-CHROMATIC_SPECTRUM = [
+color_palette = [
     '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFA500',
     '#800080', '#008000', '#000080', '#FFD700', '#00CED1', '#FF4500', '#7FFF00',
     '#DC143C', '#1E90FF', '#DAA520', '#32CD32', '#B22222', '#FF69B4'
 ]
 
-
-class NetworkStructure:
-    def __init__(self, vertex_count, edge_chance):
-        self.vertex_count = vertex_count
-        self.connections = []
-        self.node_locations = {}
-
-        for i in range(vertex_count):
-            for j in range(i + 1, vertex_count):
-                if random.random() < edge_chance:
-                    self.connections.append((i, j))
-
-        for i in range(vertex_count):
-            theta = 2 * math.pi * i / vertex_count
-            r = 0.8
-            x = r * math.cos(theta)
-            y = r * math.sin(theta)
-            self.node_locations[i] = (x, y)
-
-    def fetch_connections(self):
-        return self.connections
-
-    def find_adjacent_nodes(self, node):
-        adjacent = []
-        for edge in self.connections:
-            if edge[0] == node:
-                adjacent.append(edge[1])
-            elif edge[1] == node:
-                adjacent.append(edge[0])
-        return adjacent
-
-    def get_node_position(self, node):
-        return self.node_locations[node]
-
-
-class VisualInterface(tk.Tk):
+class VertexColoringGUI(tk.Tk):
     def __init__(self):
         tk.Tk.__init__(self)
-        self.title("Vertex Coloring Problem")
+        self.title("Vertex Coloring Visualization")
         self.configure(bg="#1A1A1D")
         self.width = self.winfo_screenwidth()
         self.height = self.winfo_screenheight()
         self.geometry("%dx%d+0+0" % (self.width, self.height))
         self.state("zoomed")
-
-        self.display = Canvas(self, bg="#1A1A1D", highlightthickness=0)
-        self.display.place(x=0, y=50, width=self.width, height=self.height - 50)
-
-        self.network = None
-        self.optimal_score = float('inf')
-        self.current_violations = 0
-
-        self.setup_control_panel()
+        self.canvas = Canvas(self, bg="#1A1A1D", highlightthickness=0)
+        self.canvas.place(x=0, y=50, width=self.width, height=self.height - 50)
+        self.graph = None
+        self.best_fitness = float('inf')
+        self.current_conflicts = 0
+        self.initialize_control_panel()
         self.mainloop()
 
-    def setup_control_panel(self):
+    def initialize_control_panel(self):
         control_panel = Canvas(self, bg="#333333", height=50, highlightthickness=0)
         control_panel.place(x=0, y=0, width=self.width, height=50)
 
-        Label(control_panel, text="Vertex Count:", fg="white", bg="#333333", font=("Arial", 12)).place(x=20, y=15)
-        self.vertex_input = Entry(control_panel, bg="#555555", fg="white", width=5, font=("Arial", 12))
-        self.vertex_input.place(x=150, y=15)
-        self.vertex_input.insert(0, "20")
+        Label(control_panel, text="Number of Nodes:", fg="white", bg="#333333", font=("Arial", 12)).place(x=20, y=15)
+        self.node_entry = Entry(control_panel, bg="#555555", fg="white", width=5, font=("Arial", 12))
+        self.node_entry.place(x=150, y=15)
+        self.node_entry.insert(0, "20")
 
-        Label(control_panel, text="Color Count:", fg="white", bg="#333333", font=("Arial", 12)).place(x=220, y=15)
-        self.color_input = Entry(control_panel, bg="#555555", fg="white", width=5, font=("Arial", 12))
-        self.color_input.place(x=340, y=15)
-        self.color_input.insert(0, "4")
+        Label(control_panel, text="Number of Colors:", fg="white", bg="#333333", font=("Arial", 12)).place(x=220, y=15)
+        self.color_entry = Entry(control_panel, bg="#555555", fg="white", width=5, font=("Arial", 12))
+        self.color_entry.place(x=340, y=15)
+        self.color_entry.insert(0, "4")
 
-        Button(control_panel, text="Create Vertices", command=self.create_network, bg="#555555", fg="black",
+        Button(control_panel, text="Generate Vertices", command=self.generate_vertex, bg="#555555", fg="black",
                font=("Arial", 12)).place(x=420, y=10)
-        Button(control_panel, text="Start Solver", command=self.initiate_thread, bg="#555555", fg="black",
+        Button(control_panel, text="Run Algorithm", command=self.start_optimization, bg="#555555", fg="black",
                font=("Arial", 12)).place(x=550, y=10)
 
-        self.status_display = Label(control_panel, text="", fg="white", bg="#333333", font=("Arial", 12), anchor="e")
-        self.status_display.place(x=self.width - 450, y=10, width=450)
+        self.status_label = Label(control_panel, text="", fg="white", bg="#333333", font=("Arial", 12), anchor="e")
+        self.status_label.place(x=self.width - 450, y=10, width=450)
 
-    def create_network(self):
+    def generate_vertex(self):
         try:
-            vertex_count = int(self.vertex_input.get())
-            self.color_count = int(self.color_input.get())
+            node_count = int(self.node_entry.get())
+            self.color_count = int(self.color_entry.get())
         except ValueError:
-            print("Invalid input for vertices or colors")
+            print("Invalid input for nodes or colors")
             return
 
-        self.network = NetworkStructure(vertex_count, EDGE_CHANCE)
-        self.clear_display()
-        self.render_network()
+        self.graph = GraphTopology(node_count, EDGE_PROBABILITY)
+        self.clear_canvas()
+        self.draw_vertex()
 
-    def clear_display(self):
-        self.display.delete("all")
+    def clear_canvas(self):
+        self.canvas.delete("all")
 
-    def adjust_coordinates(self, x, y):
+    def scale_coordinates(self, x, y):
         margin = 150
         screen_x = (x + 1) * (self.width - 2 * margin) / 2 + margin
         screen_y = (y + 1) * (self.height - 2 * margin) / 2
         return screen_x, screen_y
 
-    def render_network(self, coloring=None):
-        if not self.network:
+    def draw_vertex(self, coloring=None):
+        if not self.graph:
             return
 
-        for edge in self.network.fetch_connections():
+        for edge in self.graph.get_edges():
             v1, v2 = edge
-            x1, y1 = self.network.get_node_position(v1)
-            x2, y2 = self.network.get_node_position(v2)
-            x1, y1 = self.adjust_coordinates(x1, y1)
-            x2, y2 = self.adjust_coordinates(x2, y2)
-            self.display.create_line(x1, y1, x2, y2, width=LINE_THICKNESS, fill='gray', dash=(5, 5))
+            x1, y1 = self.graph.get_node_position(v1)
+            x2, y2 = self.graph.get_node_position(v2)
+            x1, y1 = self.scale_coordinates(x1, y1)
+            x2, y2 = self.scale_coordinates(x2, y2)
+            self.canvas.create_line(x1, y1, x2, y2, width=EDGE_WIDTH, fill='gray', dash=(5, 5))
 
-        for vertex in range(self.network.vertex_count):
-            x, y = self.network.get_node_position(vertex)
-            x, y = self.adjust_coordinates(x, y)
-            color = CHROMATIC_SPECTRUM[coloring[vertex] if coloring else 0]
-            self.display.create_oval(
-                x - VERTEX_SIZE, y - VERTEX_SIZE,
-                x + VERTEX_SIZE, y + VERTEX_SIZE,
+        for node in range(self.graph.node_count):
+            x, y = self.graph.get_node_position(node)
+            x, y = self.scale_coordinates(x, y)
+            color = color_palette[coloring[node] if coloring else 0]
+            self.canvas.create_oval(
+                x - NODE_RADIUS, y - NODE_RADIUS,
+                x + NODE_RADIUS, y + NODE_RADIUS,
                 fill='white' if not coloring else color,
                 outline='black', width=2
             )
 
-    def update_status(self, iteration):
-        status_text = f"Colors used: {self.color_count} | Conflicts: {self.current_violations} | Best fitness: {self.optimal_score} | Generation: {iteration}"
-        self.status_display.config(text=status_text)
+    def update_status_display(self, generation):
+        status_text = f"Colors: {self.color_count} | Conflicts: {self.current_conflicts} | Best Score: {self.best_fitness} | Generation: {generation}"
+        self.status_label.config(text=status_text)
 
-    def initiate_thread(self):
-        if not self.network:
-            print("Create a network first!")
+    def start_optimization(self):
+        if not self.graph:
+            print("Generate a graph first!")
             return
-        thread = threading.Thread(target=self.optimize)
+        thread = threading.Thread(target=self.run_optimization)
         thread.start()
 
-    def optimize(self):
-        def count_violations(coloring):
-            violations = 0
-            for edge in self.network.fetch_connections():
+    def run_optimization(self):
+        def calculate_conflicts(coloring):
+            conflicts = 0
+            for edge in self.graph.get_edges():
                 v1, v2 = edge
                 if coloring[v1] == coloring[v2]:
-                    violations += 1
-            return violations
+                    conflicts += 1
+            return conflicts
 
-        def calculate_fitness(genome):
-            return count_violations(genome)
+        def evaluate_fitness(genome):
+            return calculate_conflicts(genome)
 
-        def initialize_population():
-            return [[random.randint(0, self.color_count - 1) for _ in range(self.network.vertex_count)] for _ in
-                    range(POPULATION_COUNT)]
+        def create_initial_population():
+            return [[random.randint(0, self.color_count - 1) for _ in range(self.graph.node_count)] for _ in
+                    range(GENOME_COUNT)]
 
-        def select_breeding_pair(population, fitnesses):
+        def choose_parents(population, fitnesses):
             def tournament():
-                contestants = random.sample(list(enumerate(fitnesses)), 3)
-                winner_idx = min(contestants, key=lambda x: x[1])[0]
+                participants = random.sample(list(enumerate(fitnesses)), 3)
+                winner_idx = min(participants, key=lambda x: x[1])[0]
                 return population[winner_idx]
 
             return tournament(), tournament()
 
-        def breed(parent1, parent2):
-            crossover_points = sorted(random.sample(range(len(parent1)), 2))
-            child = parent1[:crossover_points[0]] + parent2[crossover_points[0]:crossover_points[1]] + parent1[
-                                                                                                       crossover_points[
-                                                                                                           1]:]
+        def crossover(parent1, parent2):
+            split_points = sorted(random.sample(range(len(parent1)), 2))
+            child = parent1[:split_points[0]] + parent2[split_points[0]:split_points[1]] + parent1[split_points[1]:]
             return child
 
-        def mutate(genome):
-            if random.random() < GENE_ALTERATION_RATE:
-                point = random.randint(0, len(genome) - 1)
+        def apply_mutation(genome):
+            if random.random() < MUTATION_RATE:
+                gene = random.randint(0, len(genome) - 1)
                 new_color = random.randint(0, self.color_count - 1)
-                while new_color == genome[point]:
+                while new_color == genome[gene]:
                     new_color = random.randint(0, self.color_count - 1)
-                genome[point] = new_color
+                genome[gene] = new_color
             return genome
 
-        def evolution_cycle(iteration=0, population=None):
-            if iteration >= TOTAL_ITERATIONS:
+        def genetic_algorithm(generation=0, population=None):
+            if generation >= MAX_GENERATIONS:
                 return
 
             if population is None:
-                population = initialize_population()
+                population = create_initial_population()
 
-            population_fitness = [(genome, calculate_fitness(genome)) for genome in population]
+            population_fitness = [(genome, evaluate_fitness(genome)) for genome in population]
             population_fitness.sort(key=lambda x: x[1])
 
-            fittest_genome = population_fitness[0][0]
-            self.optimal_score = population_fitness[0][1]
-            self.current_violations = self.optimal_score
+            best_genome = population_fitness[0][0]
+            self.best_fitness = population_fitness[0][1]
+            self.current_conflicts = self.best_fitness
 
-            print(f'Generation {iteration}, Current Conflicts: {self.optimal_score}')
-            self.after(0, self.clear_display)
-            self.after(0, self.render_network, fittest_genome)
-            self.after(0, self.update_status, iteration)
+            print(f'Generation {generation}, Current Conflicts: {self.best_fitness}')
+            self.after(0, self.clear_canvas)
+            self.after(0, self.draw_vertex, best_genome)
+            self.after(0, self.update_status_display, generation)
 
-            if self.optimal_score == 0:
+            if self.best_fitness == 0:
                 return
 
             next_generation = []
-            next_generation.extend([genome for genome, _ in population_fitness[:ELITE_SURVIVORS]])
+            next_generation.extend([genome for genome, _ in population_fitness[:TOP_PERFORMERS]])
 
-            while len(next_generation) < POPULATION_COUNT:
-                parent1, parent2 = select_breeding_pair(
+            while len(next_generation) < GENOME_COUNT:
+                parent1, parent2 = choose_parents(
                     [genome for genome, _ in population_fitness],
                     [fitness for _, fitness in population_fitness]
                 )
-                offspring = breed(parent1, parent2)
-                offspring = mutate(offspring)
+                offspring = crossover(parent1, parent2)
+                offspring = apply_mutation(offspring)
                 next_generation.append(offspring)
 
-            self.after(int(RENDER_DELAY * 1000), evolution_cycle, iteration + 1, next_generation)
+            self.after(int(VISUALIZATION_INTERVAL * 1000), genetic_algorithm, generation + 1, next_generation)
 
-        evolution_cycle()
+        genetic_algorithm()
+
+        class GraphTopology:
+            def __init__(self, node_count, EDGE_PROBABILITY):
+                self.node_count = node_count
+                self.edges = []
+                self.node_coordinates = {}
+
+                for i in range(node_count):
+                    for j in range(i + 1, node_count):
+                        if random.random() < EDGE_PROBABILITY:
+                            self.edges.append((i, j))
+
+                for i in range(node_count):
+                    angle = 2 * math.pi * i / node_count
+                    radius = 0.8
+                    x = radius * math.cos(angle)
+                    y = radius * math.sin(angle)
+                    self.node_coordinates[i] = (x, y)
+
+            def get_edges(self):
+                return self.edges
+
+            def get_neighbors(self, node):
+                neighbors = []
+                for edge in self.edges:
+                    if edge[0] == node:
+                        neighbors.append(edge[1])
+                    elif edge[1] == node:
+                        neighbors.append(edge[0])
+                return neighbors
+
+            def get_node_position(self, node):
+                return self.node_coordinates[node]
+
+class GraphTopology:
+    def __init__(self, node_count, EDGE_PROBABILITY):
+        self.node_count = node_count
+        self.edges = []
+        self.node_coordinates = {}
+
+        for i in range(node_count):
+            for j in range(i + 1, node_count):
+                if random.random() < EDGE_PROBABILITY:
+                    self.edges.append((i, j))
+
+        for i in range(node_count):
+            angle = 2 * math.pi * i / node_count
+            radius = 0.8
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            self.node_coordinates[i] = (x, y)
+
+    def get_edges(self):
+        return self.edges
+
+    def get_neighbors(self, node):
+        neighbors = []
+        for edge in self.edges:
+            if edge[0] == node:
+                neighbors.append(edge[1])
+            elif edge[1] == node:
+                neighbors.append(edge[0])
+        return neighbors
+
+    def get_node_position(self, node):
+        return self.node_coordinates[node]
 
 
 if __name__ == "__main__":
-    VisualInterface()
+    VertexColoringGUI()
